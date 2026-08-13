@@ -36,16 +36,20 @@ def _logo_flowable(db: Session, max_w=140, max_h=64):
     lf = organization.logo_file(db)
     if not lf:
         return None
-    path, mime = lf
-    if "svg" in (mime or "") or path.lower().endswith(".svg"):
+    ref, mime = lf
+    if "svg" in (mime or "") or str(ref).lower().endswith(".svg"):
         return None
     try:
+        import io
         from reportlab.lib.utils import ImageReader
         from reportlab.platypus import Image
-        ir = ImageReader(path)
+        data = organization.logo_bytes(db)   # bytes from durable storage (path or Blob URL)
+        if not data:
+            return None
+        ir = ImageReader(io.BytesIO(data))
         iw, ih = ir.getSize()
         scale = min(max_w / iw, max_h / ih)
-        return Image(path, width=iw * scale, height=ih * scale)
+        return Image(io.BytesIO(data), width=iw * scale, height=ih * scale)
     except Exception:  # noqa: BLE001
         return None
 

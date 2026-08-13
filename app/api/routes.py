@@ -737,11 +737,15 @@ def delete_organization_logo(request: Request, db: Session = Depends(get_db)) ->
 
 @router.get("/organization/logo", tags=["organization"])
 def get_organization_logo(db: Session = Depends(get_db)):
+    from fastapi import Response
     lf = organization.logo_file(db)
     if not lf:
         raise HTTPException(status_code=404, detail="No logo set.")
-    path, mime = lf
-    return FileResponse(path, media_type=mime)
+    _ref, mime = lf
+    data = organization.logo_bytes(db)   # durable storage (filesystem path or Blob URL)
+    if data is None:
+        raise HTTPException(status_code=404, detail="No logo set.")
+    return Response(content=data, media_type=mime)
 
 
 # ── Credit Notes (customer / vendor) + application ──────────────────────────────────────────
@@ -1052,18 +1056,22 @@ def get_attachment(att_id: str, db: Session = Depends(get_db)) -> AttachmentOut:
 @router.get("/attachments/{att_id}/download", tags=["attachments"])
 def download_attachment(att_id: str, request: Request, disposition: str = Query("attachment"),
                         db: Session = Depends(get_db)):
+    from fastapi import Response
+    from ..services.storage import StorageError
     actor, _ = _actor_role(request, db)
     try:
         att = attachments.get(db, att_id)
     except AttachmentError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    if not os.path.exists(att.storage_path):
-        raise HTTPException(status_code=410, detail="File is missing from storage.")
+    try:
+        data = attachments.read_bytes(att)   # durable storage (filesystem path or Vercel Blob)
+    except StorageError as e:
+        raise HTTPException(status_code=410, detail=str(e)) from e
     disp = "inline" if disposition == "inline" else "attachment"
     attachments.record_access(db, att_id, actor, download=(disp == "attachment"))
     safe = att.display_name.replace('"', "")
-    return FileResponse(att.storage_path, media_type=att.mime_type,
-                        headers={"Content-Disposition": f'{disp}; filename="{safe}"'})
+    return Response(content=data, media_type=att.mime_type,
+                    headers={"Content-Disposition": f'{disp}; filename="{safe}"'})
 
 
 @router.get("/attachments/{att_id}/events", response_model=list[AttachmentEventOut], tags=["attachments"])

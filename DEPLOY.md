@@ -12,22 +12,21 @@
 | Repo | Local git initialized, branch **`main`**, committed. **Not yet pushed** — needs your GitHub account. |
 | Target repo name | `erp-ameen` |
 | Deploy files | ✅ `vercel.json` + `api/index.py` (Vercel), `Dockerfile`/`render.yaml`/`Procfile` (persistent-host), `.gitignore`, `DEPLOY.md` — all present & validated |
-| Code readiness | ✅ Postgres auto-detected from `POSTGRES_URL`; DB init runs on serverless cold start; `postgres://` URLs normalized to `postgresql+psycopg`; `psycopg[binary]` added to requirements |
+| Code readiness | ✅ Postgres auto-detected from `POSTGRES_URL`; **durable file storage via Vercel Blob** (auto when `BLOB_READ_WRITE_TOKEN` present); DB init on cold start; `psycopg[binary]` added |
 | Secrets in repo | ✅ None. `data/`, `*.sqlite3`, backups, `.env`, `.venv` are git-ignored and unstaged |
-| Test suite | ✅ 221 passed after the Vercel/Postgres refactor (SQLite path unchanged) |
+| Test suite | ✅ 224 passed (221 core + 3 Blob-backend simulation); SQLite/filesystem path unchanged |
 | Production-config E2E | ✅ Passed with `AUTH_ENABLED=true`: login, gating, dashboard, seeded CoA (41), invoice+payment, vendor bill, document upload, AR-aging/income-statement/VAT-return, invoice PDF, xlsx export, e-invoice generate→submit (sample), SPA/static, 404/401 |
+| File persistence | ✅ Uploaded documents + archived exports + logo stored in **durable object storage** (Vercel Blob) — the Blob URL is saved in Postgres and streamed back through the app's authenticated download endpoint. Survives redeploys/restarts/new devices. |
+| Function size | ✅ Measured ≈120 MB uncompressed (well under Vercel's 250 MB limit) — **all dependencies kept**, no functionality removed. |
 | Hosting URL | ⏳ Created after you deploy — `https://erp-ameen.vercel.app` |
-| **Blocked (needs your login)** | Push to GitHub, add Vercel Postgres, and click Deploy in Vercel. No CLI/token for GitHub or Vercel is available on the build machine. |
+| **Blocked (needs your login)** | Push to GitHub, add Vercel **Postgres** + **Blob**, click Deploy. No CLI/token for GitHub or Vercel is available on the build machine. |
 
-### Vercel constraints (be aware)
-- **Database = Postgres, not SQLite.** Add **Vercel Postgres** (Storage tab) — it sets
-  `POSTGRES_URL`, which the app auto-detects. Without it, data will not persist.
-- **Uploaded files are ephemeral on Vercel.** Attachments/logo write under `/tmp` and don't
-  survive between invocations. Accounting data (Postgres) persists. Durable file storage would
-  need Vercel Blob (a later change).
-- **Function size.** The PDF/Excel/parse dependencies are sizeable; if a Vercel build hits the
-  serverless size limit, drop `pdfplumber` and `xlrd` from `requirements.txt` (only the
-  TB/GL-import PDF/XLS parsing feature needs them).
+### Vercel notes
+- **Database = Postgres.** Add **Vercel Postgres** (Storage tab) — sets `POSTGRES_URL`, auto-detected.
+- **Files = Vercel Blob.** Add a **Blob** store (Storage tab) — sets `BLOB_READ_WRITE_TOKEN`,
+  auto-detected. Without it the app falls back to the local filesystem, which is ephemeral on
+  Vercel — so **add the Blob store** for durable documents.
+- **Function size is fine** — no need to trim `pdfplumber`/`xlrd` (measured ≈120 MB < 250 MB).
 
 ---
 
@@ -121,9 +120,11 @@ which initializes the database on cold start; `POSTGRES_URL` is auto-detected; `
 2. **Import to Vercel:** <https://vercel.com/new> → **Import Git Repository** → pick `erp-ameen`.
    Framework preset: **Other**. Deploy once (it will run, but has no database yet).
 3. **Add a database:** project → **Storage** → **Create Database** → **Postgres** (or connect
-   **Neon**). Link it to the project. Vercel injects `POSTGRES_URL` automatically — the app
-   picks it up with no code change.
-4. **Set Environment Variables** (project → Settings → Environment Variables), then redeploy:
+   **Neon**). Link it to the project. Vercel injects `POSTGRES_URL` automatically.
+4. **Add durable file storage:** project → **Storage** → **Create** → **Blob**. Link it. Vercel
+   injects `BLOB_READ_WRITE_TOKEN` automatically — the app then stores every uploaded document,
+   archived export, and logo in Blob (durable, survives redeploys).
+5. **Set Environment Variables** (project → Settings → Environment Variables):
 
    | Variable | Value |
    |----------|-------|
@@ -131,13 +132,12 @@ which initializes the database on cold start; `POSTGRES_URL` is auto-detected; `
    | `ADMIN_PASSWORD` | your chosen admin password (do NOT commit it) |
    | `AUTH_ENABLED` | `true` |
    | `RESET_EXPOSE_TOKEN` | `false` |
-   | `ATTACHMENTS_DIR` | `/tmp/attachments` |
-   | `ORG_DIR` | `/tmp/org` |
    | `SEED_ON_STARTUP` | `true` |
 
-   (`POSTGRES_URL` is provided by the linked database — you don't set it by hand.)
-5. **Redeploy** (Deployments → ⋯ → Redeploy) so the env vars + database take effect.
-6. Live at **`https://erp-ameen.vercel.app`**. First login: `admin` / your `ADMIN_PASSWORD` —
+   (`POSTGRES_URL` and `BLOB_READ_WRITE_TOKEN` are provided by the linked Storage — don't set
+   them by hand. `ATTACHMENTS_DIR`/`ORG_DIR` are unused once Blob is active.)
+6. **Redeploy** (Deployments → ⋯ → Redeploy) so the env vars + storage take effect.
+7. Live at **`https://erp-ameen.vercel.app`**. First login: `admin` / your `ADMIN_PASSWORD` —
    change it immediately. Add a custom domain under **Settings → Domains** if you own one.
 
 ### Verify after deploy
@@ -145,10 +145,8 @@ which initializes the database on cold start; `POSTGRES_URL` is auto-detected; `
 - Log in; the Chart of Accounts is seeded; e-invoicing is on the **sample** sandbox provider
   (switch it in *E-Invoice Settings* if needed) — still marked *Provisional — requires UAE SME
   validation*.
-
-> Reminder: on Vercel, **uploaded documents are ephemeral** (`/tmp`); accounting data in
-> Postgres persists. If a build fails on function size, trim `pdfplumber`/`xlrd` from
-> `requirements.txt`.
+- Upload a document to any transaction, redeploy, and confirm it's still downloadable from the
+  Archive — proving Blob persistence.
 
 ---
 

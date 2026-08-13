@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import Organization
+from . import storage
 
 _ORG_ID = "org"
 _LOGO_EXT = {"png", "jpg", "jpeg", "svg", "webp", "gif"}
@@ -46,7 +47,7 @@ def profile(db: Session) -> dict:
         "trade_license": o.trade_license, "country": o.country or "AE",
         "einvoice_scheme": o.einvoice_scheme, "einvoice_id": o.einvoice_id,
         "bank_name": o.bank_name, "bank_iban": o.bank_iban,
-        "has_logo": bool(o.logo_path and os.path.exists(o.logo_path)),
+        "has_logo": bool(o.logo_path and storage.exists(o.logo_path)),
         "logo_filename": o.logo_filename, "logo_mime": o.logo_mime,
         "updated_at": o.updated_at.isoformat() if o.updated_at else None,
     }
@@ -113,42 +114,45 @@ def set_logo(db: Session, filename: str, content: bytes) -> dict:
         raise OrganizationError("The logo file is empty.")
     if len(content) > get_settings().max_upload_mb * 1024 * 1024:
         raise OrganizationError("Logo file is too large.")
-    d = get_settings().org_dir
-    os.makedirs(d, exist_ok=True)
     o = get_org(db)
-    # remove a previous logo with a different extension
-    if o.logo_path and os.path.exists(o.logo_path):
-        try:
-            os.remove(o.logo_path)
-        except OSError:
-            pass
-    path = os.path.join(d, f"logo.{ext}")
-    with open(path, "wb") as fh:
-        fh.write(content)
+    # remove a previous logo (filesystem path or Blob URL)
+    if o.logo_path:
+        storage.delete(o.logo_path)
+    mime = _LOGO_MIME.get(ext, "application/octet-stream")
+    ref = storage.save(f"org/logo.{ext}", content, mime)
     o.logo_filename = filename
-    o.logo_mime = _LOGO_MIME.get(ext, "application/octet-stream")
-    o.logo_path = path
+    o.logo_mime = mime
+    o.logo_path = ref
     db.commit()
     return profile(db)
 
 
 def remove_logo(db: Session) -> dict:
     o = get_org(db)
-    if o.logo_path and os.path.exists(o.logo_path):
-        try:
-            os.remove(o.logo_path)
-        except OSError:
-            pass
+    if o.logo_path:
+        storage.delete(o.logo_path)
     o.logo_filename = o.logo_mime = o.logo_path = None
     db.commit()
     return profile(db)
 
 
 def logo_file(db: Session):
+    """Return (reference, mime) for the org logo, or None. The reference is a filesystem path or
+    a Blob URL — callers fetch bytes via `storage.read`."""
     o = get_org(db)
-    if not o.logo_path or not os.path.exists(o.logo_path):
+    if not o.logo_path or not storage.exists(o.logo_path):
         return None
     return o.logo_path, o.logo_mime or "application/octet-stream"
+
+
+def logo_bytes(db: Session) -> bytes | None:
+    lf = logo_file(db)
+    if not lf:
+        return None
+    try:
+        return storage.read(lf[0])
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ── For reports / PDFs ──────────────────────────────────────────────────────────────────────

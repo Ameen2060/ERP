@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from . import storage
 from ..models import (
     Attachment,
     AttachmentEvent,
@@ -144,20 +145,24 @@ def _log(db: Session, att: Attachment, action: str, actor: str, note: str | None
 
 
 # ── Document intelligence (template-free) ────────────────────────────────────────────────────
-def _read_text(path: str, ext: str) -> str | None:
-    """Best-effort plain-text extraction. Returns None when the type isn't machine-readable
-    here (e.g. images need OCR, which isn't installed in this prototype)."""
+def _read_text(ref: str, ext: str) -> str | None:
+    """Best-effort plain-text extraction from a stored file reference (filesystem path or Blob
+    URL). Returns None when the type isn't machine-readable here (e.g. images need OCR)."""
+    import io
+    try:
+        data = storage.read(ref)
+    except Exception:  # noqa: BLE001 — storage/network hiccup shouldn't fail the upload
+        return None
     try:
         if ext == "pdf":
             import pdfplumber
-            with pdfplumber.open(path) as pdf:
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
                 return "\n".join((p.extract_text() or "") for p in pdf.pages)
         if ext in ("csv", "txt"):
-            with open(path, "rb") as fh:
-                return fh.read().decode("utf-8", errors="replace")
+            return data.decode("utf-8", errors="replace")
         if ext == "xlsx":
             from openpyxl import load_workbook
-            wb = load_workbook(path, read_only=True, data_only=True)
+            wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
             out = []
             for ws in wb.worksheets:
                 for row in ws.iter_rows(values_only=True):
@@ -165,7 +170,7 @@ def _read_text(path: str, ext: str) -> str | None:
             return "\n".join(out)
         if ext == "xls":
             import xlrd
-            book = xlrd.open_workbook(path)
+            book = xlrd.open_workbook(file_contents=data)
             out = []
             for sh in book.sheets():
                 for r in range(sh.nrows):
@@ -176,7 +181,7 @@ def _read_text(path: str, ext: str) -> str | None:
                 import docx  # python-docx, optional
             except Exception:  # noqa: BLE001
                 return None
-            d = docx.Document(path)
+            d = docx.Document(io.BytesIO(data))
             parts = [p.text for p in d.paragraphs]
             for t in d.tables:
                 for row in t.rows:
@@ -301,17 +306,17 @@ def _validate(filename: str, data: bytes) -> str:
     return ext
 
 
-def _dir_for(entity_type: str, entity_id: str) -> str:
-    d = os.path.join(get_settings().attachments_dir, entity_type, entity_id)
-    os.makedirs(d, exist_ok=True)
-    return d
+def _write(att_id: str, entity_type: str, entity_id: str, ext: str, data: bytes,
+           mime: str = "application/octet-stream") -> str:
+    """Persist the bytes via the durable storage backend (Vercel Blob in production, filesystem
+    locally / on a mounted disk). Returns the reference to store in the DB."""
+    key = f"{entity_type}/{entity_id}/{att_id}.{ext}"
+    return storage.save(key, data, mime)
 
 
-def _write(att_id: str, entity_type: str, entity_id: str, ext: str, data: bytes) -> str:
-    path = os.path.join(_dir_for(entity_type, entity_id), f"{att_id}.{ext}")
-    with open(path, "wb") as fh:
-        fh.write(data)
-    return path
+def read_bytes(att: Attachment) -> bytes:
+    """Fetch an attachment's bytes from durable storage (path or Blob URL)."""
+    return storage.read(att.storage_path)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────────────────
@@ -329,8 +334,8 @@ def save_upload(db: Session, entity_type: str, entity_id: str, filename: str,
         storage_path="", sha256=hashlib.sha256(data).hexdigest(), uploaded_by=actor or "local",
     )
     db.add(att)
-    db.flush()  # need att.id for the path
-    att.storage_path = _write(att.id, entity_type, str(entity_id), ext, data)
+    db.flush()  # need att.id for the storage key
+    att.storage_path = _write(att.id, entity_type, str(entity_id), ext, data, att.mime_type)
     _log(db, att, "uploaded", actor, note=f"{filename} ({len(data)} bytes)")
     extract_and_match(db, att)
     _log(db, att, "extracted", actor, note=f"extraction={att.extraction_status}, match={att.match_status}")
@@ -377,12 +382,9 @@ def replace(db: Session, att_id: str, filename: str, data: bytes, actor: str = "
     att.original_name = filename
     att.file_size = len(data)
     att.sha256 = hashlib.sha256(data).hexdigest()
-    att.storage_path = _write(att.id, att.entity_type, att.entity_id, ext, data)
-    if old_path and old_path != att.storage_path and os.path.exists(old_path):
-        try:
-            os.remove(old_path)
-        except OSError:
-            pass
+    att.storage_path = _write(att.id, att.entity_type, att.entity_id, ext, data, att.mime_type)
+    if old_path and old_path != att.storage_path:
+        storage.delete(old_path)
     att.review_status = "pending"
     extract_and_match(db, att)
     _log(db, att, "replaced", actor, note=f"→ {filename} ({len(data)} bytes)")
