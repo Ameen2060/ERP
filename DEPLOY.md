@@ -1,5 +1,28 @@
 # Deploying the Accounting / ERP app
 
+## Deployment status (last updated by automated prep)
+
+| Item | Status |
+|------|--------|
+| Repo | Local git initialized, branch **`main`**, first commit done. **Not yet pushed** — needs your GitHub account. |
+| Target repo name | `erp-ameen` |
+| Deploy files | ✅ `Dockerfile`, `render.yaml`, `Procfile`, `vercel.json`, `.gitignore`, `.dockerignore`, `DEPLOY.md`, `api/index.py` — all present & validated |
+| Secrets in repo | ✅ None. `data/`, `*.sqlite3`, backups, `.env`, `.venv` are git-ignored and unstaged |
+| Production-config E2E | ✅ Passed locally with `AUTH_ENABLED=true`: login, auth gating, dashboard, seeded CoA (41), create invoice+payment, vendor bill, document upload, AR-aging / income-statement / VAT-return reports, invoice PDF, xlsx export, e-invoice generate→submit (sample sandbox), SPA/static, 404/401 handling |
+| Persistence | ✅ Configured — SQLite + uploads on a mounted disk at `/data` (survives restarts & redeploys) |
+| Hosting URL | ⏳ Created after you deploy — will be `https://erp-ameen.onrender.com` |
+| **Blocked (needs your login)** | Creating/pushing the GitHub repo, and clicking Deploy in Render. No CLI/token for either is available on the build machine. |
+
+### Environment variables to set in Render
+`SECRET_KEY` auto-generates via `render.yaml`. You **must** set **`ADMIN_PASSWORD`** (marked
+`sync:false`). All others are pre-set in `render.yaml`/`Dockerfile`. First login is
+`admin` / your `ADMIN_PASSWORD`; change it in-app immediately.
+
+> On a fresh production database the e-invoicing provider defaults to **`manual`**. Switch it to
+> **`sample`** in *E-Invoice Settings* if you want the sandbox submit→accepted flow there.
+
+---
+
 This app is a **single stateful FastAPI process** (API + web UI on one port) backed by a
 **SQLite** file plus uploaded files (attachments, org logo). The cleanest way to run it live and
 keep data is a host that runs a persistent container with a **mounted disk** — Render, Railway,
