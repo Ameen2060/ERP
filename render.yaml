@@ -1,0 +1,30 @@
+# Render blueprint — deploys the Accounting/ERP app as a persistent Docker web service with a
+# mounted disk for the SQLite database + uploaded files. Import this repo at
+# https://dashboard.render.com/blueprints (New → Blueprint) and Render reads this file.
+services:
+  - type: web
+    name: erp-ameen
+    runtime: docker
+    plan: starter            # 'free' also works but sleeps; 'starter' stays warm
+    region: singapore        # closest Render region to the UAE
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true          # Render generates a strong secret
+      - key: ADMIN_PASSWORD
+        sync: false                  # set this yourself in the dashboard (do NOT commit it)
+      - key: AUTH_ENABLED
+        value: "true"
+      - key: RESET_EXPOSE_TOKEN
+        value: "false"
+      - key: DATABASE_URL
+        value: sqlite:////data/accounting.sqlite3
+      - key: ATTACHMENTS_DIR
+        value: /data/attachments
+      - key: ORG_DIR
+        value: /data/org
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1

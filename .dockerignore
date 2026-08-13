@@ -1,0 +1,9 @@
+.venv/
+data/
+tests/
+*.md
+_check.js
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/

@@ -1,0 +1,10 @@
+# Local data — DB, backups, uploaded attachments, org logo. NEVER publish these.
+data/
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Local dev scratch
+_check.js
+.env
