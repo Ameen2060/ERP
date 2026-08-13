@@ -423,6 +423,10 @@ def health() -> dict:
         "postgres_env_present": bool(os.getenv("POSTGRES_URL") or os.getenv("POSTGRES_URL_NON_POOLING")),
         "blob_env_present": bool(os.getenv("BLOB_READ_WRITE_TOKEN")),
         "on_vercel": bool(os.getenv("VERCEL")),
+        # Security posture (booleans only — never the secret values). True = still on the insecure
+        # built-in default; set ADMIN_PASSWORD / SECRET_KEY env vars to flip these to False.
+        "admin_password_is_default": settings.admin_password == "admin123",
+        "secret_key_is_default": settings.secret_key == "change-me-please-set-a-strong-secret",
     }
 
 

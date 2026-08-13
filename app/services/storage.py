@@ -99,6 +99,11 @@ def save(key: str, data: bytes, content_type: str = "application/octet-stream") 
     if _blob_token():
         return _blob_put(key, data, content_type)
     base = get_settings().attachments_dir
+    # On Vercel with no Blob store linked, the project filesystem is read-only — writing there
+    # 500s. Fall back to a writable (but EPHEMERAL) /tmp dir so uploads don't crash; link Vercel
+    # Blob for durable file storage.
+    if os.getenv("VERCEL") and not os.path.abspath(base).replace("\\", "/").startswith("/tmp"):
+        base = "/tmp/attachments"
     path = os.path.join(base, key)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as fh:
