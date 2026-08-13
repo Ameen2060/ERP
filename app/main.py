@@ -36,8 +36,12 @@ settings = get_settings()
 _WEB_DIR = Path(__file__).parent / "web"
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
+def bootstrap_database() -> None:
+    """Create tables, apply additive column migrations, and seed reference data.
+
+    Idempotent and safe to call repeatedly. Invoked from the FastAPI lifespan for a normal
+    server run, and also at import time by the Vercel serverless entrypoint (whose runtime may
+    not fire lifespan events)."""
     from . import models  # noqa: F401  (register models on the metadata)
     from .database import ensure_columns
 
@@ -130,6 +134,11 @@ async def lifespan(_: FastAPI):
             _perms.ensure_seed(db)  # seed the role→action permission matrix
             from .services import einvoicing as _einv
             _einv.ensure_config(db)  # seed the provisional e-invoicing configuration
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    bootstrap_database()
     yield
 
 

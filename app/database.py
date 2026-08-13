@@ -21,14 +21,28 @@ def _normalise_db_url(url: str) -> str:
     return url
 
 
-DATABASE_URL = _normalise_db_url(settings.database_url)
+# Resolve the effective URL. When DATABASE_URL is left at the SQLite default but a platform
+# Postgres connection string is present (e.g. Vercel Postgres / Neon set POSTGRES_URL), use it —
+# so a Vercel deployment with a linked Postgres works with zero extra configuration.
+_raw_url = settings.database_url
+if _raw_url.startswith("sqlite"):
+    _platform_pg = os.getenv("POSTGRES_URL") or os.getenv("POSTGRES_URL_NON_POOLING")
+    if _platform_pg:
+        _raw_url = _platform_pg
+
+DATABASE_URL = _normalise_db_url(_raw_url)
 
 connect_args: dict = {}
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
     db_path = DATABASE_URL.replace("sqlite:///", "")
     if db_path and db_path != ":memory:":
-        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+        # Best-effort: on a read-only serverless filesystem this dir can't be created; that's
+        # fine because a real deployment uses Postgres (above), not this SQLite fallback.
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+        except OSError:
+            pass
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args, future=True, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)

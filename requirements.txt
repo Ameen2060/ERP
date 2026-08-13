@@ -9,6 +9,7 @@ pdfplumber>=0.11
 xlrd>=2.0
 reportlab>=4.0
 Pillow>=10.0            # image handling for attachments
+psycopg[binary]>=3.1   # PostgreSQL driver (Vercel Postgres / Neon / any managed Postgres)
 # python-docx>=1.1      # optional: enables text extraction from .docx attachments
 # dev / test
 pytest>=8.2

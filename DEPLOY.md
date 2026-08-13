@@ -1,32 +1,35 @@
 # Deploying the Accounting / ERP app
 
+> **Chosen target: Vercel.** The app has been adapted to run on Vercel's Python runtime with a
+> hosted **Postgres** database (Vercel can't keep a SQLite file). See **Deploy on Vercel** below.
+> The Docker / persistent-disk options (Render/Railway/Fly) remain available and are simpler if
+> you ever want an all-in-one host — they're kept further down.
+
 ## Deployment status (last updated by automated prep)
 
 | Item | Status |
 |------|--------|
-| Repo | Local git initialized, branch **`main`**, first commit done. **Not yet pushed** — needs your GitHub account. |
+| Repo | Local git initialized, branch **`main`**, committed. **Not yet pushed** — needs your GitHub account. |
 | Target repo name | `erp-ameen` |
-| Deploy files | ✅ `Dockerfile`, `render.yaml`, `Procfile`, `vercel.json`, `.gitignore`, `.dockerignore`, `DEPLOY.md`, `api/index.py` — all present & validated |
+| Deploy files | ✅ `vercel.json` + `api/index.py` (Vercel), `Dockerfile`/`render.yaml`/`Procfile` (persistent-host), `.gitignore`, `DEPLOY.md` — all present & validated |
+| Code readiness | ✅ Postgres auto-detected from `POSTGRES_URL`; DB init runs on serverless cold start; `postgres://` URLs normalized to `postgresql+psycopg`; `psycopg[binary]` added to requirements |
 | Secrets in repo | ✅ None. `data/`, `*.sqlite3`, backups, `.env`, `.venv` are git-ignored and unstaged |
-| Production-config E2E | ✅ Passed locally with `AUTH_ENABLED=true`: login, auth gating, dashboard, seeded CoA (41), create invoice+payment, vendor bill, document upload, AR-aging / income-statement / VAT-return reports, invoice PDF, xlsx export, e-invoice generate→submit (sample sandbox), SPA/static, 404/401 handling |
-| Persistence | ✅ Configured — SQLite + uploads on a mounted disk at `/data` (survives restarts & redeploys) |
-| Hosting URL | ⏳ Created after you deploy — will be `https://erp-ameen.onrender.com` |
-| **Blocked (needs your login)** | Creating/pushing the GitHub repo, and clicking Deploy in Render. No CLI/token for either is available on the build machine. |
+| Test suite | ✅ 221 passed after the Vercel/Postgres refactor (SQLite path unchanged) |
+| Production-config E2E | ✅ Passed with `AUTH_ENABLED=true`: login, gating, dashboard, seeded CoA (41), invoice+payment, vendor bill, document upload, AR-aging/income-statement/VAT-return, invoice PDF, xlsx export, e-invoice generate→submit (sample), SPA/static, 404/401 |
+| Hosting URL | ⏳ Created after you deploy — `https://erp-ameen.vercel.app` |
+| **Blocked (needs your login)** | Push to GitHub, add Vercel Postgres, and click Deploy in Vercel. No CLI/token for GitHub or Vercel is available on the build machine. |
 
-### Environment variables to set in Render
-`SECRET_KEY` auto-generates via `render.yaml`. You **must** set **`ADMIN_PASSWORD`** (marked
-`sync:false`). All others are pre-set in `render.yaml`/`Dockerfile`. First login is
-`admin` / your `ADMIN_PASSWORD`; change it in-app immediately.
-
-> On a fresh production database the e-invoicing provider defaults to **`manual`**. Switch it to
-> **`sample`** in *E-Invoice Settings* if you want the sandbox submit→accepted flow there.
+### Vercel constraints (be aware)
+- **Database = Postgres, not SQLite.** Add **Vercel Postgres** (Storage tab) — it sets
+  `POSTGRES_URL`, which the app auto-detects. Without it, data will not persist.
+- **Uploaded files are ephemeral on Vercel.** Attachments/logo write under `/tmp` and don't
+  survive between invocations. Accounting data (Postgres) persists. Durable file storage would
+  need Vercel Blob (a later change).
+- **Function size.** The PDF/Excel/parse dependencies are sizeable; if a Vercel build hits the
+  serverless size limit, drop `pdfplumber` and `xlrd` from `requirements.txt` (only the
+  TB/GL-import PDF/XLS parsing feature needs them).
 
 ---
-
-This app is a **single stateful FastAPI process** (API + web UI on one port) backed by a
-**SQLite** file plus uploaded files (attachments, org logo). The cleanest way to run it live and
-keep data is a host that runs a persistent container with a **mounted disk** — Render, Railway,
-or Fly.io. Vercel is **not** a real fit (see the caveat at the bottom).
 
 The repo is already deploy-ready:
 
@@ -108,14 +111,49 @@ git push -u origin main
 
 ---
 
-## Why not Vercel (the honest caveat)
+## Deploy on Vercel (chosen path)
 
-`vercel.json` + `api/index.py` will run the app on Vercel, **but Vercel is serverless with a
-read-only filesystem** — the SQLite database can't persist, so data resets on every cold start.
-Use it only for a throwaway demo. For real use on Vercel you'd have to move the database to an
-external managed Postgres (e.g. Neon / Vercel Postgres) and adapt the SQLite-specific startup
-migrations — that's a separate change, not covered here. The Docker + persistent-disk options
-above give a genuinely working, data-persistent deployment with far less effort.
+The app is already adapted for Vercel: `vercel.json` serves `api/index.py` (the ASGI app),
+which initializes the database on cold start; `POSTGRES_URL` is auto-detected; `psycopg` is in
+`requirements.txt`.
 
-To deploy the demo anyway: `vercel` (from this folder, with the Vercel CLI + your account) →
-`https://erp-ameen.vercel.app`.
+1. **Push to GitHub** (see *Push to GitHub* above) — repo `erp-ameen`.
+2. **Import to Vercel:** <https://vercel.com/new> → **Import Git Repository** → pick `erp-ameen`.
+   Framework preset: **Other**. Deploy once (it will run, but has no database yet).
+3. **Add a database:** project → **Storage** → **Create Database** → **Postgres** (or connect
+   **Neon**). Link it to the project. Vercel injects `POSTGRES_URL` automatically — the app
+   picks it up with no code change.
+4. **Set Environment Variables** (project → Settings → Environment Variables), then redeploy:
+
+   | Variable | Value |
+   |----------|-------|
+   | `SECRET_KEY` | a long random string (e.g. `openssl rand -hex 32`) |
+   | `ADMIN_PASSWORD` | your chosen admin password (do NOT commit it) |
+   | `AUTH_ENABLED` | `true` |
+   | `RESET_EXPOSE_TOKEN` | `false` |
+   | `ATTACHMENTS_DIR` | `/tmp/attachments` |
+   | `ORG_DIR` | `/tmp/org` |
+   | `SEED_ON_STARTUP` | `true` |
+
+   (`POSTGRES_URL` is provided by the linked database — you don't set it by hand.)
+5. **Redeploy** (Deployments → ⋯ → Redeploy) so the env vars + database take effect.
+6. Live at **`https://erp-ameen.vercel.app`**. First login: `admin` / your `ADMIN_PASSWORD` —
+   change it immediately. Add a custom domain under **Settings → Domains** if you own one.
+
+### Verify after deploy
+- `https://erp-ameen.vercel.app/health` → `{"status":"ok"}`
+- Log in; the Chart of Accounts is seeded; e-invoicing is on the **sample** sandbox provider
+  (switch it in *E-Invoice Settings* if needed) — still marked *Provisional — requires UAE SME
+  validation*.
+
+> Reminder: on Vercel, **uploaded documents are ephemeral** (`/tmp`); accounting data in
+> Postgres persists. If a build fails on function size, trim `pdfplumber`/`xlrd` from
+> `requirements.txt`.
+
+---
+
+## Alternative: Docker + persistent disk (Render / Railway / Fly) — simplest all-in-one
+
+If you'd rather not manage a separate database, these hosts run the container 24/7 with a
+mounted disk, so **SQLite + uploaded files both persist** with zero extra services. The
+`Dockerfile`, `render.yaml` and `Procfile` are ready. See the Render/Railway/Fly steps above.
