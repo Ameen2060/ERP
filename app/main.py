@@ -136,9 +136,36 @@ def bootstrap_database() -> None:
             _einv.ensure_config(db)  # seed the provisional e-invoicing configuration
 
 
+_BOOTSTRAP_DONE = False
+_BOOTSTRAP_ERROR: str | None = None
+
+
+def _scrub(msg: str) -> str:
+    """Remove any embedded connection credentials/URL from an error message."""
+    import re
+    msg = re.sub(r"[a-z+]+://[^\s'\")]+", "<db-url>", msg, flags=re.I)  # strip driver://user:pw@host
+    return msg[:400]
+
+
+def ensure_bootstrap() -> None:
+    """Run DB bootstrap once; on failure record a scrubbed error and allow a later retry instead
+    of crashing the whole serverless function (FUNCTION_INVOCATION_FAILED)."""
+    global _BOOTSTRAP_DONE, _BOOTSTRAP_ERROR
+    if _BOOTSTRAP_DONE:
+        return
+    try:
+        bootstrap_database()
+        _BOOTSTRAP_DONE = True
+        _BOOTSTRAP_ERROR = None
+    except Exception as e:  # noqa: BLE001 — surface via /health, retry next request
+        _BOOTSTRAP_ERROR = f"{type(e).__name__}: {_scrub(str(e))}"
+        import sys
+        print(f"[bootstrap] failed: {_BOOTSTRAP_ERROR}", file=sys.stderr)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    bootstrap_database()
+    ensure_bootstrap()
     yield
 
 
@@ -156,6 +183,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _lazy_bootstrap(request: Request, call_next):
+    # Retry DB init on requests until it succeeds — lets the app self-heal once a linked
+    # database becomes reachable, without needing a redeploy. Cheap once tables already exist.
+    if not _BOOTSTRAP_DONE:
+        ensure_bootstrap()
+    return await call_next(request)
 
 # ── Auth endpoints (login is public; the rest of the API is gated) ──────────────────────
 auth_api = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -353,7 +389,41 @@ app.include_router(api_router, dependencies=[Depends(require_user)])
 
 @app.get("/health", tags=["system"])
 def health() -> dict:
-    return {"status": "ok", "app": settings.app_name, "version": __version__}
+    """Liveness + DB diagnostics. Never raises — safe to hit even when the DB is misconfigured,
+    so a fresh deployment can be diagnosed without server logs."""
+    import os
+    from .database import DATABASE_URL, engine
+    ensure_bootstrap()
+    dialect = engine.url.get_backend_name()
+    db_ok, db_error = False, None
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception as e:  # noqa: BLE001
+        db_error = f"{type(e).__name__}: {_scrub(str(e))}"
+    persistent = dialect.startswith("postgre") or (
+        DATABASE_URL.startswith("sqlite") and "/tmp/" not in DATABASE_URL and ":memory:" not in DATABASE_URL)
+    try:
+        from .services import storage
+        file_backend = storage.backend_name()
+    except Exception:  # noqa: BLE001
+        file_backend = "unknown"
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "app": settings.app_name, "version": __version__,
+        "db_backend": dialect,
+        "db_ok": db_ok,
+        "db_persistent": persistent,
+        "db_error": db_error,
+        "bootstrap_ok": _BOOTSTRAP_DONE,
+        "bootstrap_error": _BOOTSTRAP_ERROR,
+        "file_storage": file_backend,
+        "postgres_env_present": bool(os.getenv("POSTGRES_URL") or os.getenv("POSTGRES_URL_NON_POOLING")),
+        "blob_env_present": bool(os.getenv("BLOB_READ_WRITE_TOKEN")),
+        "on_vercel": bool(os.getenv("VERCEL")),
+    }
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

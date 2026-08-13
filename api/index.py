@@ -12,8 +12,9 @@ REQUIREMENTS for a working Vercel deployment (see DEPLOY.md):
   * Env vars: SECRET_KEY, ADMIN_PASSWORD, AUTH_ENABLED=true, RESET_EXPOSE_TOKEN=false.
 """
 
-from app.main import app, bootstrap_database  # noqa: F401  — Vercel serves the ASGI `app`
+from app.main import app, ensure_bootstrap  # noqa: F401  — Vercel serves the ASGI `app`
 
-# Initialize schema + seed on cold start (idempotent). If the database is unreachable this will
-# raise and Vercel will surface it in the function logs — which is the correct, visible failure.
-bootstrap_database()
+# Initialize schema + seed on cold start (idempotent). ensure_bootstrap() never raises — on a DB
+# error it records a scrubbed message surfaced at GET /health and retries on the next request, so
+# a misconfigured database degrades gracefully instead of crashing the whole function.
+ensure_bootstrap()

@@ -29,6 +29,11 @@ if _raw_url.startswith("sqlite"):
     _platform_pg = os.getenv("POSTGRES_URL") or os.getenv("POSTGRES_URL_NON_POOLING")
     if _platform_pg:
         _raw_url = _platform_pg
+    elif os.getenv("VERCEL"):
+        # On Vercel with no managed Postgres linked, the project filesystem is read-only — a
+        # relative SQLite path would crash the function at startup. Fall back to a writable (but
+        # EPHEMERAL) /tmp database so the app still boots; link Vercel Postgres for durable data.
+        _raw_url = "sqlite:////tmp/accounting.sqlite3"
 
 DATABASE_URL = _normalise_db_url(_raw_url)
 
