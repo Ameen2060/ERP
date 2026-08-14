@@ -15,10 +15,24 @@ settings = get_settings()
 
 def _normalise_db_url(url: str) -> str:
     if url.startswith("postgres://"):
-        return "postgresql+psycopg://" + url[len("postgres://"):]
-    if url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + url[len("postgresql://"):]
-    return url
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    if not url.startswith("postgresql+psycopg://"):
+        return url
+    # Managed Postgres providers (Supabase, Neon, etc.) append query params that are NOT valid
+    # libpq connection keywords — e.g. Supabase's `supa=...` and Prisma-style `pgbouncer=true` —
+    # and psycopg rejects them with 'invalid connection option'. Keep only real libpq keywords
+    # and ensure TLS (hosted Postgres requires SSL).
+    from urllib.parse import parse_qsl, urlencode
+    _LIBPQ = {"sslmode", "sslrootcert", "sslcert", "sslkey", "connect_timeout", "application_name",
+              "options", "target_session_attrs", "hostaddr", "keepalives", "keepalives_idle",
+              "gssencmode", "channel_binding"}
+    base, _, query = url.partition("?")
+    params = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k.lower() in _LIBPQ]
+    if not any(k.lower() == "sslmode" for k, _ in params):
+        params.append(("sslmode", "require"))
+    return base + "?" + urlencode(params)
 
 
 # Resolve the effective URL. When DATABASE_URL is left at the SQLite default but a platform
