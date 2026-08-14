@@ -222,14 +222,18 @@ def _parse_fields(text: str) -> dict:
         return fields
     flat = re.sub(r"[ \t]+", " ", text)
 
-    m = re.search(r"(?:tax\s+invoice|invoice|inv|bill|credit\s+note)\s*(?:no\.?|number|#|:)?\s*[:#]?\s*"
+    # \b after the keyword stops 'inv' matching the prefix of 'Invoice' (which previously
+    # captured the leftover 'oice'); separators include comma/newline/dash/= for CSV & label
+    # layouts; the digit-guard rejects captured words that aren't real document numbers.
+    m = re.search(r"\b(?:tax\s+invoice|invoice|inv|bill|credit\s+note)\b"
+                  r"\s*(?:no\.?|number|nbr|ref(?:erence)?|#)?[\s:#.,\-=|]*"
                   r"([A-Za-z0-9][A-Za-z0-9\-/]{2,})", flat, re.I)
-    if m:
-        fields["invoice_number"] = m.group(1).strip(" .:-")
-    m = re.search(r"(?:P\.?O\.?|purchase\s+order|order)\s*(?:no\.?|number|#|:)?\s*[:#]?\s*"
+    if m and any(ch.isdigit() for ch in m.group(1)):
+        fields["invoice_number"] = m.group(1).strip(" .:-,")
+    m = re.search(r"(?:P\.?O\.?|purchase\s+order|order)\s*(?:no\.?|number|#|:)?[\s:#.,\-=|]*"
                   r"([A-Za-z0-9][A-Za-z0-9\-/]{2,})", flat, re.I)
-    if m:
-        fields["order_reference"] = m.group(1).strip(" .:-")
+    if m and any(ch.isdigit() for ch in m.group(1)):
+        fields["order_reference"] = m.group(1).strip(" .:-,")
     trn = _TRN.search(flat)
     if trn:
         fields["trn"] = trn.group(1)
